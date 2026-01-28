@@ -8,8 +8,8 @@ const studentRoutes = require("./routes/studentRoutes");
 
 const app = express();
 
-app.use(cors());
 app.use(express.json());
+app.use("/students", studentRoutes);
 
 // MongoDB Connection
 mongoose.connect("mongodb://43.205.133.116:27017/mern_demo")
