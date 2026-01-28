@@ -1,0 +1,96 @@
+name: Full Auto Deploy MERN to EC2
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ---------------- CHECKOUT ----------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ---------------- DOCKER HUB LOGIN ----------------
+      - name: Login to Docker Hub
+        run: |
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login \
+            -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      # ---------------- BUILD & PUSH BACKEND ----------------
+      - name: Build & Push Backend
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/backend:latest ./backend
+          docker push ${{ secrets.DOCKER_USERNAME }}/backend:latest
+
+      # ---------------- BUILD & PUSH FRONTEND ----------------
+      - name: Build & Push Frontend
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/frontend:latest ./frontend
+          docker push ${{ secrets.DOCKER_USERNAME }}/frontend:latest
+
+      # ---------------- DEPLOY TO EC2 ----------------
+      - name: Install Docker & Run Containers on EC2
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+            set -e
+
+            echo "🚀 Starting deployment..."
+
+            # -------- INSTALL DOCKER --------
+            if ! command -v docker &> /dev/null
+            then
+              sudo apt update -y
+              sudo apt install docker.io -y
+              sudo systemctl start docker
+              sudo systemctl enable docker
+            fi
+
+            # -------- DOCKER LOGIN --------
+            echo "${{ secrets.DOCKER_PASSWORD }}" | sudo docker login \
+              -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+            # -------- NETWORK --------
+            sudo docker network create mern-network || true
+
+            # -------- MONGO --------
+            sudo docker stop mongo || true
+            sudo docker rm mongo || true
+            sudo docker run -d \
+              --name mongo \
+              --network mern-network \
+              --restart always \
+              -p 27017:27017 \
+              -v mongo_data:/data/db \
+              mongo
+
+            # -------- BACKEND --------
+            sudo docker pull ${{ secrets.DOCKER_USERNAME }}/backend:latest
+            sudo docker stop backend || true
+            sudo docker rm backend || true
+            sudo docker run -d \
+              --name backend \
+              --network mern-network \
+              --restart always \
+              -p 5000:5000 \
+              -e MONGO_URL=mongodb://mongo:27017/mern_demo \
+              ${{ secrets.DOCKER_USERNAME }}/backend:latest
+
+            # -------- FRONTEND --------
+            sudo docker pull ${{ secrets.DOCKER_USERNAME }}/frontend:latest
+            sudo docker stop frontend || true
+            sudo docker rm frontend || true
+            sudo docker run -d \
+              --name frontend \
+              --restart always \
+              -p 3000:3000 \
+              ${{ secrets.DOCKER_USERNAME }}/frontend:latest
+
+            echo "✅ Deployment completed successfully"
